@@ -1,0 +1,515 @@
+---
+title: "Life Expectancy Analysis"
+author: "Dominik Grzegorzewicz"
+date: "13 12 2020"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    keep_md: true
+runtime: shiny
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Preliminaries
+
+Used libraries
+```{r libraries, warning=FALSE, message=FALSE}
+library(readr)
+library(dplyr)
+library(knitr)
+library(ggplot2)
+library(tidyr)
+library(stringr)
+library(DMwR)
+library(reshape2)
+library(leaflet)
+```
+
+The line making the code reproducible
+```{r reproducability}
+set.seed(101)
+```
+
+Load dataset
+```{r load}
+df <- read_csv("data/Life_Expectancy_Data.csv", quote = "")
+```
+
+## Data summary
+
+First let's see the size and print couple of records to see the structure of the data set
+```{r dim}
+dim(df)
+```
+
+```{r head, results='hide'}
+kable(head(df), digits=2)
+```
+
+```{r head_tables, echo=FALSE}
+kable(select(head(df), Country:BMI), digits=2)
+kable(select(head(df), `under-five deaths`:Schooling), digits=2)
+```
+
+As we can see the dataset contains `r nrow(df)` records of `r ncol(df)` features. Zawiera on informacje o ogólnym stanie gospodarki oraz o badaniach medycznych dla danego kraju w danym roku.
+
+```{r infos}
+kable(sapply(df, n_distinct))
+```
+
+Powyższa tabela zawiera iloci unikalnych wartoci dla kazdej kolumny. Widac ze dane zostaly zebrane dla 193 panstw i zebrane zostaly na przestrzeni 16 lat.
+
+Podstawowe statystyki dla każdej kolumny w zbiorze
+```{r summary}
+kable(summary(select(df, Country:Measles)))
+kable(summary(select(df, BMI:`thinness 5-9 years`)))
+kable(summary(select(df, `Income composition of resources`:Schooling)))
+```
+
+W zbiorze znajduja sie 2 kolumny kateogryczne - Country oraz Status, a pozostae kolumny zawieraj dane numeryczne. Statystyki pokazuja ze dane sa w duzej mierze nieustandaryzowane, a wartosci min i max dla kolumn takich jak np. 'percentage expenditure', GDP czy BMI wskazuja takze na wystepowanie outlierow.
+
+Zauwazono rowniez ze 193 kraje * 16 obserwacji (kazdy rok) = `r 193*16`, a laczna liczba obserwacji = `r nrow(df)`. Postanowiono wiec sprawdzic liczebnosc obserwacji dla kazdego roku:
+
+```{r sum_year}
+df %>% group_by(Year) %>% summarise(count = n()) %>% kable
+```
+
+Wyglada na to ze 183 panstwa sa w pelni reprezentowane na przestrzeni lat 2000 - 2016, a w 2013 znalazlo sie 10 dodatkowych. Sprawdzono wiec co to za panstwa:
+
+```{r 2013_countries}
+df %>% 
+  group_by(Country) %>% 
+  summarise(count = n(), gdp = GDP, population = Population, life_expectancy = `Life expectancy`) %>% 
+  filter(count == 1) %>% 
+  kable
+```
+
+Patrzac na otrzymany wynik oraz bazujac na wiedzy geograficznej mozna stwierdzic, ze sa to stosunkowo niewielkei kraje. Ciekawe jest rowniez to, ze nie posiadamy dla nich informacji o zmiennej przewidywanej - Life expectancy. Sprawdzono przy tym ilosc rekordow z brakujaca wartoscia dla Life expectancy: 
+
+```{r life_exp_missing}
+df %>% filter(is.na(`Life expectancy`)) %>% nrow()
+```
+
+Widac, ze ilosc rekordow sie pokrywa - wszystkie rekordy z brakujaca wartoscia Life expectancy naleza do panstw, reprezentowanych pojedynczo w roku 2013.
+
+## Data cleaning
+
+Count % of missing values for every column
+```{r missing_plot}
+missing_df <- df %>% 
+  summarise_all(list(~sum(is.na(.))/length(.))) %>%
+  gather(key="column", value="missing") %>%
+  filter(missing > 0) %>%
+  ggplot(aes(x=reorder(column, missing), y=missing)) +
+  geom_bar(stat="identity") +
+  coord_flip()
+
+missing_df
+```
+
+Powyzszy wykres pokazuje procent brakujacych przypadkow w kolumnach. Widac, ze najbardziej wybrakowana cecha jest Population, w ktorej brakujace wartosci stanowia ponad 20% wszystkich wartosci w kolumnie.
+
+Postanowiono lepiej przyjrzec sie brakujacym wartosciom w zbiorze. W pierwszej kolejnosci podsumowano iloci brakujacych danych w wierszach i wypisano je wraz z ich liczebnoscia
+```{r missing_by_row}
+na_count <- apply(df, 1, function(x) sum(is.na(x)))
+idx <- 1:nrow(df)
+id_na_count <- as.data.frame(cbind(idx, na_count))
+
+counts <- id_na_count %>%
+  group_by(na_count) %>%
+  summarize(amount = n()) %>%
+  arrange(desc(na_count))
+
+kable(counts)
+```
+
+Wychodzi na to, ze jest 13 przypadkow wybrakowanych w ponad 30%. Zdecydowano sie wiec na ten punkt odciecia i sprawdzono w jakich panstwach i latach wystepowaly te przypadki
+
+```{r rows}
+row_select <- id_na_count %>%
+  filter(na_count >= 8) %>%
+  select(idx)
+
+df[unlist(row_select),] %>% select(Country, Year) %>% kable
+```
+
+Lacznie sa to trzy panstwa, z czego dane dla South Sudan sa mocno wybrakowane na przestrzeni lat 2000-2010. Ma to sens, gdyz panstwo to formalnie powstalo dopiero w 2011 roku. Pozostale wartosci - Monaco oraz San Marino, odnosza sie do wyzej wymienionych panstw majacych jedynie jeden rekord danych dla roku 2013.
+
+Ze wzgledu na to ze Population jest najbardziej wybrakowanym atrybutem, postanowiono takze blizej go przeanalizowac. Wypisano wiec kraje w ktorych atrybut ten nie zostal ani razu uzupelniony.
+Checking Population statistics for countries
+
+```{r missing_population}
+by_country_population <- df %>%
+  group_by(Country) %>%
+  summarise(
+    count = n(),
+    na = sum(is.na(Population))
+  ) %>%
+  filter(count == na) %>%
+  select(Country)
+
+kable(pull(by_country_population, Country))
+
+country_pop <- df %>%
+  group_by(Country) %>%
+  summarise(
+    mean_pop = mean(Population),
+    median_pop = median(Population),
+    std_pop = sd(Population),
+    min_pop = min(Population),
+    max_pop = max(Population),
+    na = sum(is.na(Population))
+  ) %>%
+  filter(na == 0)
+
+kable(sample_n(country_pop, 20))
+```
+
+Lista jest dluga i znajduja sie na niej najrozniejsze panstwa, teoretycznie, bazujac na wiedzy geograficznej, nie majace ze soba zbyt wiele wspolnego.
+
+Powyzsza analiza doprowadzila do podjecia dezycji o usunieciu rekordow z brakujaca wartoscia dla atrybutu przewidywanego - Life expectancy, rekordow majacych najwieksza ilosc wybrakowanych wartosci, oraz atrybutu Population, ktory jest najbardziej wybrakowanym atrybutem, a takze, w teorii, zawierajacym informacje juz reprezentowane w zbiorze w postaci atrybutu GDP, czyli PKB per capita.
+
+```{r drop}
+df <- df[-unlist(row_select),]
+df <- filter(df, !is.na(`Life expectancy`))
+df <- select(df, -Population)
+
+dim(df)
+```
+
+Zbior po usunieciu wybranych wartosci ma wiec wymiary wypisane powyzej. Po raz kolejny zdecydowano sie wiec wyrysowac wykres prezentujacy procentowa wartosc wybrakowania atrybutow:
+
+```{r missing_plot2}
+missing_df <- df %>% 
+  summarise_all(list(~sum(is.na(.))/length(.))) %>%
+  gather(key="column", value="missing") %>%
+  filter(missing > 0) %>%
+  ggplot(aes(x=reorder(column, missing), y=missing)) +
+  geom_bar(stat="identity") +
+  coord_flip()
+
+missing_df
+```
+
+Z wykresu zniknely 3 kolumny. Postanowiono znowu doglebniej przyjrzec sie kilku przypadkom. Najrzadziej wybrakowanym sa atrybuty Polio oraz Diphtheria, prezentujace procent dzieci 1 rocznych zaszczepionych na dane choroby. Sprawdzono wiec co dla jakich panstw oraz w jakich latach zostalo to nieuzupelnione:
+
+```{r missing_dip_pol}
+diphtheria_polio <- df %>%
+  filter(is.na(Diphtheria) | is.na(Polio)) %>%
+  select(Country, Year, GDP, `Life expectancy`)
+kable(diphtheria_polio)
+```
+
+Rowniez sa to ciekawe przypadki, gdyz znowu wartosci sa wybrakowane dla panstw ktore nie istnialy w danych latach. Czarnogora powstala w 2006, oraz Timor Wschodni w 2002. Co ciekawe od tych momentow te atrybuty dla tych panstw sa juz uzupelnione.
+
+Kolejny atrybut jaki postanowiono sprawdzic 
+
+```{r missing_thin, cache=TRUE}
+thinness <- df %>%
+  filter(is.na(`thinness 5-9 years`) | is.na(`thinness  1-19 years`) | is.na(BMI))
+kable(unique(thinness$Country))
+
+by_country_alcohol <- df %>%
+  group_by(Country) %>%
+  summarise(
+    count = n(),
+    na = sum(is.na(Alcohol))
+  ) %>%
+  filter(count == na) %>%
+  select(Country)
+
+kable(pull(by_country_alcohol, Country))
+
+by_country_schooling <- df %>%
+  group_by(Country) %>%
+  summarise(
+    count = n(),
+    na = sum(is.na(Schooling))
+  ) %>%
+  filter(count == na) %>%
+  select(Country)
+
+kable(pull(by_country_schooling, Country))
+
+by_country_income <- df %>%
+  group_by(Country) %>%
+  summarise(
+    count = n(),
+    na = sum(is.na(`Income composition of resources`))
+  ) %>%
+  filter(count == na) %>%
+  select(Country)
+
+kable(pull(by_country_income, Country))
+
+by_country_exp <- df %>%
+  group_by(Country) %>%
+  summarise(
+    count = n(),
+    na = sum(is.na(`Total expenditure`))
+  ) %>%
+  filter(count == na) %>%
+  select(Country)
+
+kable(pull(by_country_exp, Country))
+
+by_country_gdp <- df %>%
+  group_by(Country) %>%
+  summarise(
+    count = n(),
+    na = sum(is.na(GDP))
+  ) %>%
+  filter(count == na) %>%
+  select(Country)
+
+kable(pull(by_country_gdp, Country))
+
+by_country_hep <- df %>%
+  group_by(Country) %>%
+  summarise(
+    count = n(),
+    na = sum(is.na(`Hepatitis B`))
+  ) %>%
+  filter(count == na) %>%
+  select(Country)
+
+kable(pull(by_country_hep, Country))
+
+```
+
+Pozostale wartosci wybrakowane postanowiono uzupelnic uzywajac do tego algorytmu knn, co jest dosc standardowa i stosunkowo trafna technika imputacji wartosci. 
+
+```{r knn_imputation, cache=TRUE}
+df_to_impute <- as.data.frame(df)
+df_to_impute$Country <- as.factor(df$Country)
+df_to_impute$Status <- as.factor(df$Status)
+
+df_clean <- knnImputation(df_to_impute)
+```
+
+Majac juz wyczyszczony zbior danych, postanowiono rowniez sprawdzic stosunek ilosci panstw rozwinietych i rozwijajacych sie. Wyniki zaprezentowano na wykresie:
+
+```{r development, echo=FALSE}
+development <- df_clean%>%
+  group_by(Status) %>%
+  summarise(count = n()) %>%
+  ggplot(aes(x=Status, y=count))+
+    geom_bar(stat="identity") +
+    labs(title="Number of cases per development status",
+         fill="Status",
+         x="Status",
+         y="Number of cases")
+
+development
+```
+
+## Prezentacja rozkładów wartości
+
+```{r distributions, cache=TRUE, fig.width=10, fig.height=10, echo=FALSE}
+
+d <- melt(df_clean[,-c(1:3)])
+ggplot(d,aes(x = value)) + 
+    facet_wrap(~variable, scales = "free", ncol=3, nrow=10) + 
+    geom_histogram(aes(y=..density..),
+                   bins=50,
+                   colour="black", fill="white") +
+    geom_density(alpha=.2, fill="#FF6666")
+
+```
+
+Powyższy wykres pokazuje rozklady wartosci poszczegolnych atrybutów. Patrzac na nie mozna wyszczegolnic grupe atrybutow o rozkladzie bliskim rozkladowi Pareto lub wrecz rozkladzie eksponencjalnym, do ktorej naleza np. GDP, Measles, czy Infant deaths. Generalnie widac prawidlowosci, ktore sa rowniez intuicyjne, np. skupianie sie wskaznikow smierci wokol niskich wartosci, lub procentowych wskaznikow szczepien wokol wyzszych.
+
+```{r analysing_outliers}
+df_clean %>% filter(`infant deaths` > 1000 | `under-five deaths` > 1000) %>%
+  select(Country, Year, `infant deaths`, `under-five deaths`) %>%
+  kable
+```
+
+## Korelacja
+
+```{r correlation_matrix, fig.width=10, fig.height=10, echo=FALSE}
+corr_mat <- df_clean %>%
+  select(-Country, -Status) %>%
+  cor() %>%
+  round(2) %>%
+  melt()
+
+corr_heat <- ggplot(corr_mat, aes(x=Var1, y=Var2, fill=value)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient2(low = "blue", high = "red", mid = "white",
+                       midpoint = 0, limit = c(-1,1), space = "Lab", 
+                       name="Pearson\nCorrelation") +
+  theme_minimal() + 
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, 
+                                   size = 9, hjust = 1)) +
+  coord_fixed()
+
+corr_heat + 
+  geom_text(aes(Var2, Var1, label = value), color = "black", size = 3)
+
+```
+
+Wykres korelacji pokazuje kilka ciekawych zaleznosci. Najwyzszy wspolczynnik korelacji = 1 osiagnieto dla pary atrybutów infant deaths, under-five deaths, co jest calkiem logiczne. Wychodzi na to ze sa to atrybuty w pelni skorelowane, zawieraja wiec praktycznie te sama informacje. Analogiczna sytuacja zachodzi dla atrybutów thinness. Kolejna wysoka korelacja wyszla dla pary GDP, percentage expenditure, co jest dosc ciekawe zwazywszy na fakt, ze juz korelacja w stosunku do Total expenditure jest dosc niska = 0.17. Mozna domyslac sie iż prawdopodobnie oznacza to ze wydatki rosna calosciowo w stosunku do pkb, co nie zmienialoby znaczaco procentowego udzialu wydatkow na ochrone zdrowia.
+
+Analizujac czesc wykresu pokazujaca wyniki dla atrybutu przewidywanego, widac, ze ma on wysoka korelacje z atrybutami Schooling oraz Income composition of resources (rowniez wysoka wspolna korelacja). Wysoka ujemna korelacja wystepuje dla atrybutu Adult mortality, co jest calkiem logiczne.
+
+Postanowiono rowniez przyjrzec sie jak poszczegolne przypadki wygladaja w praktyce w podziale na kraje rozwiniete i rozwijajace sie. Wykreslono wiec wykresy punktowe dla zmiennych niezaleznych wzgledem zmiennej przewidywanej.
+
+```{r scatter_corr, fig.width=10, fig.height=15, echo=FALSE}
+df_name <- df_clean
+colnames(df_name)[4] <- "Life_expectancy"
+d <- melt(data = select(df_name, -c(Country, Year)), 
+          id.vars=c("Status", "Life_expectancy"))
+ggplot(d,aes(x = value, y=Life_expectancy, color=Status)) + 
+    facet_wrap(~variable, scales = "free", ncol=3, nrow=10) + 
+    geom_point(size=0.6)
+```
+
+## Srednia wartosc dlugosci zycia na swiecie
+
+```{r life_expectancy_year_plot, echo=FALSE}
+life_expectancy_by_year <- df_clean %>%
+  group_by(Year) %>%
+  filter(!is.na(`Life expectancy`)) %>%
+  summarise(mean_life_expectancy = mean(`Life expectancy`)) %>%
+  ggplot(aes(x=Year, y=mean_life_expectancy)) +
+  geom_line(size=1.5) +
+  labs(title = "Mean life expectancy in the world 2000-2015",
+       x = "Year",
+       y = "Mean life expectancy",
+       color = "c")
+
+life_expectancy_by_year
+```
+
+Wykres pokazuje ze wartosc sredniej dlugosci zycia na swiecie rosnie. Postanowiono przyjrzec sie jak to wyglada w podziale na panstwa rozwiniete i rozwijajace sie
+
+```{r life_expectancy_development, echo=FALSE}
+life_expectancy_development <- df_clean %>%
+  group_by(Status,Year) %>%
+  summarise(mean_life_expectancy = mean(`Life expectancy`)) %>%
+  ggplot(aes(x=Year, y=mean_life_expectancy, group=Status, color=Status)) +
+  geom_line(size=1.5) +
+  labs(title = "Mean life expectancy in the world 2000-2015",
+       x = "Year",
+       y = "Mean life expectancy")
+
+life_expectancy_development
+```
+
+Rowniez tutaj widac, ze ogolny trend dla obu kategorii jest raczej wzrostowy. Jednak dla panstw rozwijajacych sie jest on niemalze liniowy. Mimo to widac znaczaca roznice miedzy tymi kategoriami, przekraczajaca ponad 10 lat.
+
+```{r life_expectancy_country_plot2000, fig.width=10, echo=FALSE}
+life_expectancy_by_country <- df_clean %>%
+  group_by(Country) %>%
+  filter(!is.na(`Life expectancy`), Year==2000) %>%
+  summarise(mean_life_expectancy = mean(`Life expectancy`)) %>%
+  arrange(mean_life_expectancy)
+
+bottom_life_expectancy <- head(life_expectancy_by_country, 10)
+bottom_life_expectancy$signal <- rep("worst", 10)
+top_life_expectancy <- tail(life_expectancy_by_country, 10)
+top_life_expectancy$signal <- rep("best", 10)
+
+to_plot <- rbind(bottom_life_expectancy, top_life_expectancy)
+  
+ggplot(to_plot, aes(x=reorder(Country, mean_life_expectancy), 
+                    y=mean_life_expectancy,
+                    fill=signal)) +
+  geom_bar(stat="identity") +
+  labs(title = "Top 10 best and worst life expectancy in the world in 2000",
+       fill = "Top 10",
+       x = "Country",
+       y = "Life expectancy") +
+  scale_fill_manual(values= c("blue", "green")) + 
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, 
+                                   size = 9, hjust = 1))
+```
+
+```{r life_expectancy_country_plot2015, fig.width=10, echo=FALSE}
+life_expectancy_by_country <- df_clean %>%
+  group_by(Country) %>%
+  filter(!is.na(`Life expectancy`), Year==2015) %>%
+  summarise(mean_life_expectancy = mean(`Life expectancy`)) %>%
+  arrange(mean_life_expectancy)
+
+bottom_life_expectancy <- head(life_expectancy_by_country, 10)
+bottom_life_expectancy$signal <- rep("worst", 10)
+top_life_expectancy <- tail(life_expectancy_by_country, 10)
+top_life_expectancy$signal <- rep("best", 10)
+
+to_plot <- rbind(bottom_life_expectancy, top_life_expectancy)
+  
+ggplot(to_plot, aes(x=reorder(Country, mean_life_expectancy), 
+                    y=mean_life_expectancy,
+                    fill=signal)) +
+  geom_bar(stat="identity") +
+  labs(title = "Top 10 best and worst life expectancy in the world in 2015",
+       fill = "Top 10",
+       x = "Country",
+       y = "Life expectancy") +
+  scale_fill_manual(values= c("blue", "green")) + 
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, 
+                                   size = 9, hjust = 1))
+```
+
+## Srednia długość życia dla poszczególnych krajów w zależności od roku
+
+```{r interactive, echo=FALSE}
+inputPanel(
+  selectInput("country", label="Country:", 
+              choices=unique(df_clean$Country), selected="Poland")
+)
+
+renderPlot({
+  
+  plot(filter(df_clean, Country == input$country)$Year,
+       y=filter(df_clean, Country == input$country)$`Life expectancy`, 
+       type="l", col="green", lwd=5, xlab="Year", ylab="Life expectancy", 
+       main="Life expectancy")
+})
+```
+
+## Regresor
+
+Wpierw należy przygotowac dane. Zamieniono wiec atrybut Status na binarny atrybut Developed. Oprócz tego postanowiono zmniejszyc wymiarowosc zbioru przez wyrzucenie kolumn wysoko skorelowanych z jakas inna kolumna (nie przewidywana). Kolumny ktore wyrzucono to: infant deaths, percentage expenditure oraz thinness 5-9.
+```{r prepare}
+df_clean$Developed <- sapply(df_clean$Status == "Developed", as.numeric)
+
+# CZY COUNTRY REZ????
+df_clean <- select(df_clean, -c(Status, Country, `infant deaths`, 
+                                `percentage expenditure`, `thinness 5-9 years`))
+```
+
+Podzielono dane na zbiory train, test oraz validate
+```{r split}
+spec = c(train = .8, test = .2)
+
+g = sample(cut(
+  seq(nrow(df_clean)), 
+  nrow(df_clean)*cumsum(c(0,spec)),
+  labels = names(spec)
+))
+
+res = split(df_clean, g)
+```
+
+```{r standarization}
+res$train <- as.data.frame(scale(res$train))
+res$test <- as.data.frame(scale(res$test))
+```
+
+```{r regression}
+linearModel = lm(`Life expectancy` ~ ., data=res$train)
+summary(linearModel)
+```
+
+```{r prediction}
+pred1 <- predict(linearModel, newdata = res$test)
+rmse <- sqrt(sum((exp(pred1) - res$test$`Life expectancy`)^2)/length(res$test$`Life expectancy`))
+c(RMSE = rmse, R2=summary(linearModel)$r.squared)
+```
