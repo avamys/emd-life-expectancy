@@ -1,7 +1,7 @@
 ---
 title: "Life Expectancy Analysis"
 author: "Dominik Grzegorzewicz"
-date: "13 12 2020"
+date: "18 12 2020"
 output: 
   html_document:
     toc: true
@@ -11,9 +11,21 @@ output:
 
 
 
-## Preliminaries
 
-Used libraries
+```r
+Sys.Date()
+```
+
+```
+## [1] "2020-12-18"
+```
+
+## Podsumowanie
+Celem projektu byla analiza zbioru danych "Life expectancy" zawierajacego informacje o dlugosci zycia w poszczegolnych panstwach na przestrzeni kilku lat. Poczatkowym etapem analizy bylo ogolne zapoznanie sie ze zbiorem. Zapoznano sie ze statystykami oraz zauwazono problem braku wystarczajacej reprezentacji kilku panstw. Szczegolowa analiza doprowadzila do decyzji o usunieciu ich ze zbioru. Nastepnie podliczono wartosci brakujace dla kazdej kolumny, i zagregowano brakujace ilosci w wierszach do postaci sum NaNów, a nastepnie przeanalizowano najbardziej wybrakowane rekordy i atrybuty. Postanowiono rowniez przyjrzec sie kilku nastepnym wartosciom, ale w koncu podjeto decyzje o dokonaniu uzupelnienia wybrakowanych wartosci przez algorytm k-NN. Nastepnie dokonano szczegolowej analizy sytuacji przez wykreslenie wykresow pomagajacych rozeznac sie w zaleznosciach miedzy atrybutami. Sprawdzono ilosci kategorii, rozklady oraz korelacje miedzy atrybutami. Stworzono rowniez interaktywny wykres dlugosci zycia w czasie pozwalajacy na filtrowanie na podstawie panstwa. Ostatnim etapem bylo wytrenowanie modelu regresji liniowej do przewidywania dlugosci zycia. W tym miejscu dokonano rowniez analizy modelu.
+
+## Operacje wstepne
+
+Uzyte biblioteki
 
 ```r
 library(readr)
@@ -25,15 +37,16 @@ library(stringr)
 library(DMwR)
 library(reshape2)
 library(leaflet)
+library(caret)
 ```
 
-The line making the code reproducible
+Zapewnienie powtarzalnosci wyników
 
 ```r
 set.seed(101)
 ```
 
-Loading dataset
+Wczytanie zbioru danych
 
 ```r
 df <- read_csv("data/Life_Expectancy_Data.csv", quote = "")
@@ -50,7 +63,17 @@ df <- read_csv("data/Life_Expectancy_Data.csv", quote = "")
 ## i Use `spec()` for the full column specifications.
 ```
 
-## Data summary
+## Zapoznanie sie ze zbiorem
+
+Pierwszym etapem analizy jest zapoznanie sie z wymiarowoscia zbioru oraz jego struktura przez wypisanie kilku poczatkowych wierszy
+
+```r
+dim(df)
+```
+
+```
+## [1] 2938   22
+```
 
 
 ```r
@@ -78,6 +101,43 @@ kable(head(df), digits=2)
 |                97|    68|              7.87|         68|      0.1|  63.54|    2978599|                 18.2|               18.2|                            0.45|       9.5|
 |               102|    66|              9.20|         66|      0.1| 553.33|    2883167|                 18.4|               18.4|                            0.45|       9.2|
 
+Zauwazono ze dane zawieraja 2938 rekordow opisanych przez 22 atrybutow. Zbior danych zaweira informacje o ogólnym stanie gospodarki oraz o badaniach medycznych dla danego kraju w danym roku.
+
+
+```r
+kable(sapply(df, n_distinct))
+```
+
+
+
+|                                |    x|
+|:-------------------------------|----:|
+|Country                         |  193|
+|Year                            |   16|
+|Status                          |    2|
+|Life expectancy                 |  363|
+|Adult Mortality                 |  426|
+|infant deaths                   |  209|
+|Alcohol                         | 1077|
+|percentage expenditure          | 2328|
+|Hepatitis B                     |   88|
+|Measles                         |  958|
+|BMI                             |  609|
+|under-five deaths               |  252|
+|Polio                           |   74|
+|Total expenditure               |  819|
+|Diphtheria                      |   82|
+|HIV/AIDS                        |  200|
+|GDP                             | 2491|
+|Population                      | 2279|
+|thinness  1-19 years            |  201|
+|thinness 5-9 years              |  208|
+|Income composition of resources |  626|
+|Schooling                       |  174|
+
+Powyższa tabela zawiera iloci unikalnych wartoci dla kazdej kolumny. Widac ze dane zostaly zebrane dla 193 panstw i zebrane zostaly na przestrzeni 16 lat.
+
+Podstawowe statystyki dla każdej kolumny w zbiorze
 
 ```r
 kable(summary(select(df, Country:Measles)))
@@ -127,7 +187,84 @@ kable(summary(select(df, `Income composition of resources`:Schooling)))
 |   |Max.   :0.9480                  |Max.   :20.70 |
 |   |NA's   :167                     |NA's   :163   |
 
-## Data cleaning
+W zbiorze znajduja sie 2 kolumny kateogryczne - Country oraz Status, a pozostae kolumny zawieraj dane numeryczne. Statystyki pokazuja ze dane sa w duzej mierze nieustandaryzowane, a wartosci min i max dla kolumn takich jak np. 'percentage expenditure', GDP czy BMI wskazuja takze na wystepowanie outlierow.
+
+Zauwazono rowniez ze 193 kraje * 16 obserwacji (kazdy rok) = 3088, a laczna liczba obserwacji = 2938. Postanowiono wiec sprawdzic liczebnosc obserwacji dla kazdego roku:
+
+
+```r
+df %>% group_by(Year) %>% summarise(count = n()) %>% kable
+```
+
+```
+## `summarise()` ungrouping output (override with `.groups` argument)
+```
+
+
+
+| Year| count|
+|----:|-----:|
+| 2000|   183|
+| 2001|   183|
+| 2002|   183|
+| 2003|   183|
+| 2004|   183|
+| 2005|   183|
+| 2006|   183|
+| 2007|   183|
+| 2008|   183|
+| 2009|   183|
+| 2010|   183|
+| 2011|   183|
+| 2012|   183|
+| 2013|   193|
+| 2014|   183|
+| 2015|   183|
+
+Wyglada na to ze 183 panstwa sa w pelni reprezentowane na przestrzeni lat 2000 - 2016, a w 2013 znalazlo sie 10 dodatkowych. Sprawdzono wiec co to za panstwa:
+
+
+```r
+df %>% 
+  group_by(Country) %>% 
+  summarise(count = n(), gdp = GDP, population = Population, life_expectancy = `Life expectancy`) %>% 
+  filter(count == 1) %>% 
+  kable
+```
+
+```
+## `summarise()` regrouping output by 'Country' (override with `.groups` argument)
+```
+
+
+
+|Country               | count|       gdp| population| life_expectancy|
+|:---------------------|-----:|---------:|----------:|---------------:|
+|Cook Islands          |     1|        NA|         NA|              NA|
+|Dominica              |     1|  722.7567|         NA|              NA|
+|Marshall Islands      |     1| 3617.7524|         NA|              NA|
+|Monaco                |     1|        NA|         NA|              NA|
+|Nauru                 |     1|  136.1832|         NA|              NA|
+|Niue                  |     1|        NA|         NA|              NA|
+|Palau                 |     1| 1932.1224|        292|              NA|
+|Saint Kitts and Nevis |     1|        NA|         NA|              NA|
+|San Marino            |     1|        NA|         NA|              NA|
+|Tuvalu                |     1| 3542.1359|       1819|              NA|
+
+Patrzac na otrzymany wynik oraz bazujac na wiedzy geograficznej mozna stwierdzic, ze sa to stosunkowo niewielkei kraje. Ciekawe jest rowniez to, ze nie posiadamy dla nich informacji o zmiennej przewidywanej - Life expectancy. Sprawdzono przy tym ilosc rekordow z brakujaca wartoscia dla Life expectancy: 
+
+
+```r
+df %>% filter(is.na(`Life expectancy`)) %>% nrow()
+```
+
+```
+## [1] 10
+```
+
+Widac, ze ilosc rekordow sie pokrywa - wszystkie rekordy z brakujaca wartoscia Life expectancy naleza do panstw, reprezentowanych pojedynczo w roku 2013.
+
+## Czyszczenie danych
 
 Count % of missing values for every column
 
@@ -145,46 +282,76 @@ missing_df
 
 ![](life_expectancy_analysis_files/figure-html/missing_plot-1.png)<!-- -->
 
+Powyzszy wykres pokazuje procent brakujacych przypadkow w kolumnach. Widac, ze najbardziej wybrakowana cecha jest Population, w ktorej brakujace wartosci stanowia ponad 20% wszystkich wartosci w kolumnie.
+
+Postanowiono lepiej przyjrzec sie brakujacym wartosciom w zbiorze. W pierwszej kolejnosci podsumowano iloci brakujacych danych w wierszach i wypisano je wraz z ich liczebnoscia
 
 ```r
 na_count <- apply(df, 1, function(x) sum(is.na(x)))
 idx <- 1:nrow(df)
-id_na_count <- as.data.frame(cbind(idx, na_count)) %>%
-  arrange(desc(na_count))
+id_na_count <- as.data.frame(cbind(idx, na_count))
 
+counts <- id_na_count %>%
+  group_by(na_count) %>%
+  summarize(amount = n()) %>%
+  arrange(desc(na_count))
+```
+
+```
+## `summarise()` ungrouping output (override with `.groups` argument)
+```
+
+```r
+kable(counts)
+```
+
+
+
+| na_count| amount|
+|--------:|------:|
+|        9|      9|
+|        8|      4|
+|        6|     28|
+|        5|     45|
+|        4|    122|
+|        3|     64|
+|        2|    360|
+|        1|    657|
+|        0|   1649|
+
+Wychodzi na to, ze jest 13 przypadkow wybrakowanych w ponad 30%. Zdecydowano sie wiec na ten punkt odciecia i sprawdzono w jakich panstwach i latach wystepowaly te przypadki
+
+
+```r
 row_select <- id_na_count %>%
   filter(na_count >= 8) %>%
   select(idx)
 
-most_na_rows <- df[unlist(row_select),]
-most_na_rows
+df[unlist(row_select),] %>% select(Country, Year) %>% kable
 ```
 
-```
-## # A tibble: 13 x 22
-##    Country  Year Status `Life expectanc~ `Adult Mortalit~ `infant deaths`
-##    <chr>   <dbl> <chr>             <dbl>            <dbl>           <dbl>
-##  1 Monaco   2013 Devel~             NA                 NA               0
-##  2 South ~  2007 Devel~             53.1              381              27
-##  3 South ~  2006 Devel~             52.5              383              28
-##  4 South ~  2005 Devel~             51.9              383              28
-##  5 South ~  2004 Devel~             51.4              383              29
-##  6 South ~  2003 Devel~             58                383              29
-##  7 South ~  2002 Devel~             52                382              30
-##  8 South ~  2001 Devel~             49.6              381              30
-##  9 South ~  2000 Devel~             48.9               38              31
-## 10 San Ma~  2013 Devel~             NA                 NA               0
-## 11 South ~  2010 Devel~             55                359              27
-## 12 South ~  2009 Devel~             54.3              369              27
-## 13 South ~  2008 Devel~             53.6              377              27
-## # ... with 16 more variables: Alcohol <dbl>, `percentage expenditure` <dbl>,
-## #   `Hepatitis B` <dbl>, Measles <dbl>, BMI <dbl>, `under-five deaths` <dbl>,
-## #   Polio <dbl>, `Total expenditure` <dbl>, Diphtheria <dbl>, `HIV/AIDS` <dbl>,
-## #   GDP <dbl>, Population <dbl>, `thinness 1-19 years` <dbl>, `thinness 5-9
-## #   years` <dbl>, `Income composition of resources` <dbl>, Schooling <dbl>
-```
 
-Checking Population statistics for countries
+
+|Country     | Year|
+|:-----------|----:|
+|Monaco      | 2013|
+|San Marino  | 2013|
+|South Sudan | 2010|
+|South Sudan | 2009|
+|South Sudan | 2008|
+|South Sudan | 2007|
+|South Sudan | 2006|
+|South Sudan | 2005|
+|South Sudan | 2004|
+|South Sudan | 2003|
+|South Sudan | 2002|
+|South Sudan | 2001|
+|South Sudan | 2000|
+
+Lacznie sa to trzy panstwa, z czego dane dla South Sudan sa mocno wybrakowane na przestrzeni lat 2000-2010. Ma to sens, gdyz panstwo to formalnie powstalo dopiero w 2011 roku. Pozostale wartosci - Monaco oraz San Marino, odnosza sie do wyzej wymienionych panstw majacych jedynie jeden rekord danych dla roku 2013.
+
+Ze wzgledu na to ze Population jest najbardziej wybrakowanym atrybutem, postanowiono takze blizej go przeanalizowac. Wypisano wiec kraje w ktorych atrybut ten nie zostal ani razu uzupelniony.
+
 
 ```r
 by_country_population <- df %>%
@@ -305,7 +472,10 @@ kable(sample_n(country_pop, 20))
 |Mexico              |  27585265.2|  11460708.5|  44950945.4|  119917|  122535969|  0|
 |Mauritius           |    663332.9|    656903.5|    588208.1|    1254|    1258653|  0|
 
-Drop rows with most na values, rows without Life expectancy value and Population column
+Lista jest dluga i znajduja sie na niej najrozniejsze panstwa, teoretycznie, bazujac na wiedzy geograficznej, nie majace ze soba zbyt wiele wspolnego.
+
+Powyzsza analiza doprowadzila do podjecia dezycji o usunieciu rekordow z brakujaca wartoscia dla atrybutu przewidywanego - Life expectancy, rekordow majacych najwieksza ilosc wybrakowanych wartosci, oraz atrybutu Population, ktory jest najbardziej wybrakowanym atrybutem, a takze, w teorii, zawierajacym informacje juz reprezentowane w zbiorze w postaci atrybutu GDP, czyli PKB per capita.
+
 
 ```r
 df <- df[-unlist(row_select),]
@@ -318,6 +488,8 @@ dim(df)
 ```
 ## [1] 2917   21
 ```
+
+Zbior po usunieciu wybranych wartosci ma wiec wymiary wypisane powyzej. Po raz kolejny zdecydowano sie wiec wyrysowac wykres prezentujacy procentowa wartosc wybrakowania atrybutow:
 
 
 ```r
@@ -334,279 +506,32 @@ missing_df
 
 ![](life_expectancy_analysis_files/figure-html/missing_plot2-1.png)<!-- -->
 
+Z wykresu zniknely 3 kolumny. Postanowiono znowu doglebniej przyjrzec sie kilku przypadkom. Najrzadziej wybrakowanym sa atrybuty Polio oraz Diphtheria, prezentujace procent dzieci 1 rocznych zaszczepionych na dane choroby. Sprawdzono wiec co dla jakich panstw oraz w jakich latach zostalo to nieuzupelnione:
+
 
 ```r
 diphtheria_polio <- df %>%
   filter(is.na(Diphtheria) | is.na(Polio)) %>%
-  select(Country, Year)
+  select(Country, Year, GDP, `Life expectancy`)
 kable(diphtheria_polio)
 ```
 
 
 
-|Country     | Year|
-|:-----------|----:|
-|Montenegro  | 2005|
-|Montenegro  | 2004|
-|Montenegro  | 2003|
-|Montenegro  | 2002|
-|Montenegro  | 2001|
-|Montenegro  | 2000|
-|Timor-Leste | 2001|
-|Timor-Leste | 2000|
+|Country     | Year|        GDP| Life expectancy|
+|:-----------|----:|----------:|---------------:|
+|Montenegro  | 2005| 3674.61792|            73.6|
+|Montenegro  | 2004|  338.19954|            73.5|
+|Montenegro  | 2003| 2789.17350|            73.5|
+|Montenegro  | 2002|  216.24327|            73.4|
+|Montenegro  | 2001|  199.58396|            73.3|
+|Montenegro  | 2000| 1627.42893|            73.0|
+|Timor-Leste | 2001|   56.42499|            59.4|
+|Timor-Leste | 2000|  422.28633|            58.7|
 
-```r
-df[["Diphtheria"]][is.na(df[["Diphtheria"]])] <- 0
-df[["Polio"]][is.na(df[["Polio"]])] <- 0
-```
+Rowniez sa to ciekawe przypadki, gdyz znowu wartosci sa wybrakowane dla panstw ktore nie istnialy w danych latach. Czarnogora powstala w 2006, oraz Timor Wschodni w 2002. Co ciekawe od tych momentow te atrybuty dla tych panstw sa juz uzupelnione.
 
-
-```r
-thinness <- df %>%
-  filter(is.na(`thinness 5-9 years`) | is.na(`thinness  1-19 years`) | is.na(BMI)) %>%
-  select(Country, Year)
-kable(thinness)
-```
-
-
-
-|Country     | Year|
-|:-----------|----:|
-|South Sudan | 2015|
-|South Sudan | 2014|
-|South Sudan | 2013|
-|South Sudan | 2012|
-|South Sudan | 2011|
-|Sudan       | 2015|
-|Sudan       | 2014|
-|Sudan       | 2013|
-|Sudan       | 2012|
-|Sudan       | 2011|
-|Sudan       | 2010|
-|Sudan       | 2009|
-|Sudan       | 2008|
-|Sudan       | 2007|
-|Sudan       | 2006|
-|Sudan       | 2005|
-|Sudan       | 2004|
-|Sudan       | 2003|
-|Sudan       | 2002|
-|Sudan       | 2001|
-|Sudan       | 2000|
-
-```r
-thinness <- df %>%
-  filter(is.na(`thinness 5-9 years`) | is.na(`thinness  1-19 years`) | is.na(BMI))
-kable(unique(thinness$Country))
-```
-
-
-
-|x           |
-|:-----------|
-|South Sudan |
-|Sudan       |
-
-```r
-by_country_alcohol <- df %>%
-  group_by(Country) %>%
-  summarise(
-    count = n(),
-    na = sum(is.na(Alcohol))
-  ) %>%
-  filter(count == na) %>%
-  select(Country)
-```
-
-```
-## `summarise()` ungrouping output (override with `.groups` argument)
-```
-
-```r
-kable(pull(by_country_alcohol, Country))
-```
-
-
-
-|x           |
-|:-----------|
-|South Sudan |
-
-```r
-by_country_schooling <- df %>%
-  group_by(Country) %>%
-  summarise(
-    count = n(),
-    na = sum(is.na(Schooling))
-  ) %>%
-  filter(count == na) %>%
-  select(Country)
-```
-
-```
-## `summarise()` ungrouping output (override with `.groups` argument)
-```
-
-```r
-kable(pull(by_country_schooling, Country))
-```
-
-
-
-|x                                                    |
-|:----------------------------------------------------|
-|"Cote d'Ivoire"                                      |
-|"Democratic People's Republic of Korea"              |
-|Czechia                                              |
-|Democratic Republic of the Congo                     |
-|Republic of Korea                                    |
-|Republic of Moldova                                  |
-|Somalia                                              |
-|United Kingdom of Great Britain and Northern Ireland |
-|United Republic of Tanzania                          |
-|United States of America                             |
-
-```r
-by_country_income <- df %>%
-  group_by(Country) %>%
-  summarise(
-    count = n(),
-    na = sum(is.na(`Income composition of resources`))
-  ) %>%
-  filter(count == na) %>%
-  select(Country)
-```
-
-```
-## `summarise()` ungrouping output (override with `.groups` argument)
-```
-
-```r
-kable(pull(by_country_income, Country))
-```
-
-
-
-|x                                                    |
-|:----------------------------------------------------|
-|"Cote d'Ivoire"                                      |
-|"Democratic People's Republic of Korea"              |
-|Czechia                                              |
-|Democratic Republic of the Congo                     |
-|Republic of Korea                                    |
-|Republic of Moldova                                  |
-|Somalia                                              |
-|United Kingdom of Great Britain and Northern Ireland |
-|United Republic of Tanzania                          |
-|United States of America                             |
-
-```r
-by_country_exp <- df %>%
-  group_by(Country) %>%
-  summarise(
-    count = n(),
-    na = sum(is.na(`Total expenditure`))
-  ) %>%
-  filter(count == na) %>%
-  select(Country)
-```
-
-```
-## `summarise()` ungrouping output (override with `.groups` argument)
-```
-
-```r
-kable(pull(by_country_exp, Country))
-```
-
-
-
-|x                                       |
-|:---------------------------------------|
-|"Democratic People's Republic of Korea" |
-|Somalia                                 |
-
-```r
-by_country_gdp <- df %>%
-  group_by(Country) %>%
-  summarise(
-    count = n(),
-    na = sum(is.na(GDP))
-  ) %>%
-  filter(count == na) %>%
-  select(Country)
-```
-
-```
-## `summarise()` ungrouping output (override with `.groups` argument)
-```
-
-```r
-kable(pull(by_country_gdp, Country))
-```
-
-
-
-|x                                                    |
-|:----------------------------------------------------|
-|"Cote d'Ivoire"                                      |
-|"Democratic People's Republic of Korea"              |
-|Bahamas                                              |
-|Bolivia (Plurinational State of)                     |
-|Congo                                                |
-|Czechia                                              |
-|Democratic Republic of the Congo                     |
-|Egypt                                                |
-|Gambia                                               |
-|Iran (Islamic Republic of)                           |
-|Kyrgyzstan                                           |
-|Lao People's Democratic Republic                     |
-|Micronesia (Federated States of)                     |
-|Republic of Korea                                    |
-|Republic of Moldova                                  |
-|Saint Lucia                                          |
-|Saint Vincent and the Grenadines                     |
-|Slovakia                                             |
-|The former Yugoslav republic of Macedonia            |
-|United Kingdom of Great Britain and Northern Ireland |
-|United Republic of Tanzania                          |
-|United States of America                             |
-|Venezuela (Bolivarian Republic of)                   |
-|Viet Nam                                             |
-|Yemen                                                |
-
-```r
-by_country_hep <- df %>%
-  group_by(Country) %>%
-  summarise(
-    count = n(),
-    na = sum(is.na(`Hepatitis B`))
-  ) %>%
-  filter(count == na) %>%
-  select(Country)
-```
-
-```
-## `summarise()` ungrouping output (override with `.groups` argument)
-```
-
-```r
-kable(pull(by_country_hep, Country))
-```
-
-
-
-|x                                                    |
-|:----------------------------------------------------|
-|Denmark                                              |
-|Finland                                              |
-|Hungary                                              |
-|Iceland                                              |
-|Japan                                                |
-|Norway                                               |
-|Slovenia                                             |
-|Switzerland                                          |
-|United Kingdom of Great Britain and Northern Ireland |
+Pozostale wartosci wybrakowane postanowiono uzupelnic uzywajac do tego algorytmu knn, co jest dosc standardowa i stosunkowo trafna technika imputacji wartosci. 
 
 
 ```r
@@ -615,249 +540,237 @@ df_to_impute$Country <- as.factor(df$Country)
 df_to_impute$Status <- as.factor(df$Status)
 
 df_clean <- knnImputation(df_to_impute)
-
-kable(filter(df, Country=="United States of America"))
 ```
 
+## Szczegolowa analiza 
+
+Majac juz wyczyszczony zbior danych, postanowiono rowniez sprawdzic stosunek ilosci panstw rozwinietych i rozwijajacych sie. Wyniki zaprezentowano na wykresie:
 
 
-|Country                  | Year|Status    | Life expectancy| Adult Mortality| infant deaths| Alcohol| percentage expenditure| Hepatitis B| Measles|  BMI| under-five deaths| Polio| Total expenditure| Diphtheria| HIV/AIDS| GDP| thinness  1-19 years| thinness 5-9 years| Income composition of resources| Schooling|
-|:------------------------|----:|:---------|---------------:|---------------:|-------------:|-------:|----------------------:|-----------:|-------:|----:|-----------------:|-----:|-----------------:|----------:|--------:|---:|--------------------:|------------------:|-------------------------------:|---------:|
-|United States of America | 2015|Developed |            79.3|              13|            23|      NA|                      0|          92|     188| 69.6|                26|    93|                NA|         95|      0.1|  NA|                  0.8|                0.6|                              NA|        NA|
-|United States of America | 2014|Developed |            79.1|              14|            23|    8.82|                      0|          92|     667| 69.1|                27|    93|             17.14|         95|      0.1|  NA|                  0.8|                0.6|                              NA|        NA|
-|United States of America | 2013|Developed |            78.9|              16|            23|    8.82|                      0|          91|     187| 68.6|                27|    93|             16.90|         94|      0.1|  NA|                  0.7|                0.6|                              NA|        NA|
-|United States of America | 2012|Developed |            78.8|              16|            24|    8.82|                      0|           9|      55| 68.0|                28|    93|             17.20|         94|      0.1|  NA|                  0.7|                0.6|                              NA|        NA|
-|United States of America | 2011|Developed |            78.7|              16|            25|    8.67|                      0|          91|     220| 67.5|                29|    94|             17.60|         96|      0.1|  NA|                  0.7|                0.6|                              NA|        NA|
-|United States of America | 2010|Developed |            78.7|              15|            25|    8.55|                      0|          92|      63| 66.9|                30|    93|             17.20|         95|      0.1|  NA|                  0.7|                0.6|                              NA|        NA|
-|United States of America | 2009|Developed |            78.5|              18|            26|    8.71|                      0|          92|      71| 66.3|                31|    93|             17.00|         95|      0.1|  NA|                  0.7|                0.6|                              NA|        NA|
-|United States of America | 2008|Developed |            78.2|              18|            27|    8.74|                      0|          94|     140| 65.7|                31|    94|             16.20|         96|      0.1|  NA|                  0.7|                0.6|                              NA|        NA|
-|United States of America | 2007|Developed |            78.1|              11|            27|    8.74|                      0|          93|      43| 65.1|                32|    93|             15.57|         96|      0.1|  NA|                  0.7|                0.6|                              NA|        NA|
-|United States of America | 2006|Developed |            77.8|             113|            28|    8.63|                      0|          93|      55| 64.4|                33|    93|             15.27|         96|      0.1|  NA|                  0.7|                0.6|                              NA|        NA|
-|United States of America | 2005|Developed |            77.5|             112|            28|    8.52|                      0|          93|      66| 63.8|                33|    92|             15.15|         96|      0.1|  NA|                  0.7|                0.6|                              NA|        NA|
-|United States of America | 2004|Developed |            77.5|             111|            28|    8.48|                      0|          92|      37| 63.1|                33|    92|             15.14|         96|      0.1|  NA|                  0.7|                0.6|                              NA|        NA|
-|United States of America | 2003|Developed |            77.2|             114|            28|    8.40|                      0|          92|      56| 62.4|                33|    91|             15.60|         96|      0.1|  NA|                  0.7|                0.6|                              NA|        NA|
-|United States of America | 2002|Developed |            77.0|             115|            28|    8.33|                      0|          88|      41| 61.7|                33|     9|             14.55|         94|      0.1|  NA|                  0.8|                0.6|                              NA|        NA|
-|United States of America | 2001|Developed |            76.9|             115|            28|    8.25|                      0|          89|     116|  6.9|                33|    89|             13.73|         94|      0.1|  NA|                  0.8|                0.6|                              NA|        NA|
-|United States of America | 2000|Developed |            76.8|             114|            28|    8.21|                      0|           9|      85|  6.1|                33|     9|             13.70|         94|      0.1|  NA|                  0.8|                0.7|                              NA|        NA|
-
-```r
-kable(filter(df_clean, Country=="United States of America"))
+```
+## `summarise()` ungrouping output (override with `.groups` argument)
 ```
 
+![](life_expectancy_analysis_files/figure-html/development-1.png)<!-- -->
 
+## Prezentacja rozkładów wartości
 
-|Country                  | Year|Status    | Life expectancy| Adult Mortality| infant deaths|  Alcohol| percentage expenditure| Hepatitis B| Measles|  BMI| under-five deaths| Polio| Total expenditure| Diphtheria| HIV/AIDS|      GDP| thinness  1-19 years| thinness 5-9 years| Income composition of resources| Schooling|
-|:------------------------|----:|:---------|---------------:|---------------:|-------------:|--------:|----------------------:|-----------:|-------:|----:|-----------------:|-----:|-----------------:|----------:|--------:|--------:|--------------------:|------------------:|-------------------------------:|---------:|
-|United States of America | 2015|Developed |            79.3|              13|            23| 5.339279|                      0|          92|     188| 69.6|                26|    93|          8.582594|         95|      0.1| 8983.811|                  0.8|                0.6|                       0.7675697|  15.05997|
-|United States of America | 2014|Developed |            79.1|              14|            23| 8.820000|                      0|          92|     667| 69.1|                27|    93|         17.140000|         95|      0.1| 7790.115|                  0.8|                0.6|                       0.7697343|  15.45165|
-|United States of America | 2013|Developed |            78.9|              16|            23| 8.820000|                      0|          91|     187| 68.6|                27|    93|         16.900000|         94|      0.1| 7339.546|                  0.7|                0.6|                       0.7682864|  15.42532|
-|United States of America | 2012|Developed |            78.8|              16|            24| 8.820000|                      0|           9|      55| 68.0|                28|    93|         17.200000|         94|      0.1| 7470.032|                  0.7|                0.6|                       0.7677787|  15.39568|
-|United States of America | 2011|Developed |            78.7|              16|            25| 8.670000|                      0|          91|     220| 67.5|                29|    94|         17.600000|         96|      0.1| 7002.973|                  0.7|                0.6|                       0.7662534|  15.40139|
-|United States of America | 2010|Developed |            78.7|              15|            25| 8.550000|                      0|          92|      63| 66.9|                30|    93|         17.200000|         95|      0.1| 6836.312|                  0.7|                0.6|                       0.7656490|  15.39750|
-|United States of America | 2009|Developed |            78.5|              18|            26| 8.710000|                      0|          92|      71| 66.3|                31|    93|         17.000000|         95|      0.1| 6644.446|                  0.7|                0.6|                       0.7649377|  15.39300|
-|United States of America | 2008|Developed |            78.2|              18|            27| 8.740000|                      0|          94|     140| 65.7|                31|    94|         16.200000|         96|      0.1| 6489.460|                  0.7|                0.6|                       0.7643974|  15.38800|
-|United States of America | 2007|Developed |            78.1|              11|            27| 8.740000|                      0|          93|      43| 65.1|                32|    93|         15.570000|         96|      0.1| 6334.680|                  0.7|                0.6|                       0.7638211|  15.38182|
-|United States of America | 2006|Developed |            77.8|             113|            28| 8.630000|                      0|          93|      55| 64.4|                33|    93|         15.270000|         96|      0.1| 6040.844|                  0.7|                0.6|                       0.7627705|  15.37696|
-|United States of America | 2005|Developed |            77.5|             112|            28| 8.520000|                      0|          93|      66| 63.8|                33|    92|         15.150000|         96|      0.1| 5856.126|                  0.7|                0.6|                       0.7620223|  15.37090|
-|United States of America | 2004|Developed |            77.5|             111|            28| 8.480000|                      0|          92|      37| 63.1|                33|    92|         15.140000|         96|      0.1| 4923.338|                  0.7|                0.6|                       0.7591914|  15.32398|
-|United States of America | 2003|Developed |            77.2|             114|            28| 8.400000|                      0|          92|      56| 62.4|                33|    91|         15.600000|         96|      0.1| 4819.638|                  0.7|                0.6|                       0.7586520|  15.31925|
-|United States of America | 2002|Developed |            77.0|             115|            28| 8.330000|                      0|          88|      41| 61.7|                33|     9|         14.550000|         94|      0.1| 4389.254|                  0.8|                0.6|                       0.7573303|  15.23381|
-|United States of America | 2001|Developed |            76.9|             115|            28| 8.250000|                      0|          89|     116|  6.9|                33|    89|         13.730000|         94|      0.1| 3583.715|                  0.8|                0.6|                       0.7522552|  15.11518|
-|United States of America | 2000|Developed |            76.8|             114|            28| 8.210000|                      0|           9|      85|  6.1|                33|     9|         13.700000|         94|      0.1| 2694.097|                  0.8|                0.7|                       0.4912451|  12.93502|
-
-
-## Exploratory Data Analysis
-
-
-```r
-d <- melt(df_clean[,-c(1:3)])
-```
 
 ```
 ## No id variables; using all as measure variables
 ```
 
-```r
-ggplot(d,aes(x = value)) + 
-    facet_wrap(~variable, scales = "free", ncol=3, nrow=10) + 
-    geom_histogram(aes(y=..density..),
-                   bins=50,
-                   colour="black", fill="white") +
-    geom_density(alpha=.2, fill="#FF6666")
-```
-
 ![](life_expectancy_analysis_files/figure-html/distributions-1.png)<!-- -->
 
+Powyższy wykres pokazuje rozklady wartosci poszczegolnych atrybutów. Patrzac na nie mozna wyszczegolnic grupe atrybutow o rozkladzie bliskim rozkladowi Pareto lub wrecz rozkladzie eksponencjalnym, do ktorej naleza np. GDP, Measles, czy Infant deaths. Generalnie widac prawidlowosci, ktore sa rowniez intuicyjne, np. skupianie sie wskaznikow smierci wokol niskich wartosci, lub procentowych wskaznikow szczepien wokol wyzszych.
+
 
 ```r
-corr_mat <- df_clean %>%
-  select(-Country, -Status) %>%
-  cor() %>%
-  round(2) %>%
-  melt()
-
-corr_heat <- ggplot(corr_mat, aes(x=Var1, y=Var2, fill=value)) +
-  geom_tile(color = "white") +
-  scale_fill_gradient2(low = "blue", high = "red", mid = "white",
-                       midpoint = 0, limit = c(-1,1), space = "Lab", 
-                       name="Pearson\nCorrelation") +
-  theme_minimal() + 
-  theme(axis.text.x = element_text(angle = 45, vjust = 1, 
-                                   size = 9, hjust = 1)) +
-  coord_fixed()
-
-corr_heat + 
-  geom_text(aes(Var2, Var1, label = value), color = "black", size = 3)
+df_clean %>% filter(`infant deaths` > 1000 | `under-five deaths` > 1000) %>%
+  select(Country, Year, `infant deaths`, `under-five deaths`) %>%
+  kable
 ```
+
+
+
+|Country | Year| infant deaths| under-five deaths|
+|:-------|----:|-------------:|-----------------:|
+|India   | 2015|           910|              1100|
+|India   | 2014|           957|              1200|
+|India   | 2013|          1000|              1300|
+|India   | 2012|          1100|              1400|
+|India   | 2011|          1100|              1500|
+|India   | 2010|          1200|              1600|
+|India   | 2009|          1300|              1700|
+|India   | 2008|          1300|              1800|
+|India   | 2007|          1400|              1900|
+|India   | 2006|          1500|              2000|
+|India   | 2005|          1500|              2000|
+|India   | 2004|          1600|              2100|
+|India   | 2003|          1700|              2200|
+|India   | 2002|          1700|              2300|
+|India   | 2001|          1800|              2400|
+|India   | 2000|          1800|              2500|
+
+## Korelacja
 
 ![](life_expectancy_analysis_files/figure-html/correlation_matrix-1.png)<!-- -->
 
+Wykres korelacji pokazuje kilka ciekawych zaleznosci. Najwyzszy wspolczynnik korelacji = 1 osiagnieto dla pary atrybutów infant deaths, under-five deaths, co jest calkiem logiczne. Wychodzi na to ze sa to atrybuty w pelni skorelowane, zawieraja wiec praktycznie te sama informacje. Analogiczna sytuacja zachodzi dla atrybutów thinness. Kolejna wysoka korelacja wyszla dla pary GDP, percentage expenditure, co jest dosc ciekawe zwazywszy na fakt, ze juz korelacja w stosunku do Total expenditure jest dosc niska = 0.17. Mozna domyslac sie iż prawdopodobnie oznacza to ze wydatki rosna calosciowo w stosunku do pkb, co nie zmienialoby znaczaco procentowego udzialu wydatkow na ochrone zdrowia.
 
-```r
-development <- df_clean%>%
-  group_by(Status) %>%
-  summarise(count = n()) %>%
-  ggplot(aes(x=Status, y=count))+
-    geom_bar(stat="identity") +
-    labs(title="Number of cases per development status",
-         fill="Status",
-         x="Status",
-         y="Number of cases")
-```
+Analizujac czesc wykresu pokazujaca wyniki dla atrybutu przewidywanego, widac, ze ma on wysoka korelacje z atrybutami Schooling oraz Income composition of resources (rowniez wysoka wspolna korelacja). Wysoka ujemna korelacja wystepuje dla atrybutu Adult mortality, co jest calkiem logiczne.
+
+Postanowiono rowniez przyjrzec sie jak poszczegolne przypadki wygladaja w praktyce w podziale na kraje rozwiniete i rozwijajace sie. Wykreslono wiec wykresy punktowe dla zmiennych niezaleznych wzgledem zmiennej przewidywanej.
+
+![](life_expectancy_analysis_files/figure-html/scatter_corr-1.png)<!-- -->
+
+## Srednia wartosc dlugosci zycia na swiecie
+
 
 ```
 ## `summarise()` ungrouping output (override with `.groups` argument)
-```
-
-```r
-development
-```
-
-![](life_expectancy_analysis_files/figure-html/development-1.png)<!-- -->
-
-
-```r
-life_expectancy_by_year <- df_clean %>%
-  group_by(Year) %>%
-  filter(!is.na(`Life expectancy`)) %>%
-  summarise(mean_life_expectancy = mean(`Life expectancy`)) %>%
-  ggplot(aes(x=Year, y=mean_life_expectancy)) +
-  geom_line(size=1.5) +
-  labs(title = "Mean life expectancy in the world 2000-2015",
-       x = "Year",
-       y = "Mean life expectancy",
-       color = "c")
-```
-
-```
-## `summarise()` ungrouping output (override with `.groups` argument)
-```
-
-```r
-life_expectancy_by_year
 ```
 
 ![](life_expectancy_analysis_files/figure-html/life_expectancy_year_plot-1.png)<!-- -->
 
+Wykres pokazuje ze wartosc sredniej dlugosci zycia na swiecie rosnie. Postanowiono przyjrzec sie jak to wyglada w podziale na panstwa rozwiniete i rozwijajace sie
 
-```r
-life_expectancy_development <- df_clean %>%
-  group_by(Status,Year) %>%
-  summarise(mean_life_expectancy = mean(`Life expectancy`)) %>%
-  ggplot(aes(x=Year, y=mean_life_expectancy, group=Status, color=Status)) +
-  geom_line(size=1.5) +
-  labs(title = "Mean life expectancy in the world 2000-2015",
-       x = "Year",
-       y = "Mean life expectancy")
-```
 
 ```
 ## `summarise()` regrouping output by 'Status' (override with `.groups` argument)
 ```
 
-```r
-life_expectancy_development
-```
-
 ![](life_expectancy_analysis_files/figure-html/life_expectancy_development-1.png)<!-- -->
 
+Rowniez tutaj widac, ze ogolny trend dla obu kategorii jest raczej wzrostowy. Jednak dla panstw rozwijajacych sie jest on niemalze liniowy. Mimo to widac znaczaca roznice miedzy tymi kategoriami, przekraczajaca ponad 10 lat.
 
-```r
-life_expectancy_by_country <- df_clean %>%
-  group_by(Country) %>%
-  filter(!is.na(`Life expectancy`), Year==2000) %>%
-  summarise(mean_life_expectancy = mean(`Life expectancy`)) %>%
-  arrange(mean_life_expectancy)
-```
 
 ```
 ## `summarise()` ungrouping output (override with `.groups` argument)
-```
-
-```r
-bottom_life_expectancy <- head(life_expectancy_by_country, 10)
-bottom_life_expectancy$signal <- rep("worst", 10)
-top_life_expectancy <- tail(life_expectancy_by_country, 10)
-top_life_expectancy$signal <- rep("best", 10)
-
-to_plot <- rbind(bottom_life_expectancy, top_life_expectancy)
-  
-ggplot(to_plot, aes(x=reorder(Country, mean_life_expectancy), 
-                    y=mean_life_expectancy,
-                    fill=signal)) +
-  geom_bar(stat="identity") +
-  labs(title = "Top 10 best and worst life expectancy in the world in 2000",
-       fill = "Top 10",
-       x = "Country",
-       y = "Life expectancy") +
-  scale_fill_manual(values= c("blue", "green")) + 
-  theme(axis.text.x = element_text(angle = 45, vjust = 1, 
-                                   size = 9, hjust = 1))
 ```
 
 ![](life_expectancy_analysis_files/figure-html/life_expectancy_country_plot2000-1.png)<!-- -->
 
 
-```r
-life_expectancy_by_country <- df_clean %>%
-  group_by(Country) %>%
-  filter(!is.na(`Life expectancy`), Year==2015) %>%
-  summarise(mean_life_expectancy = mean(`Life expectancy`)) %>%
-  arrange(mean_life_expectancy)
-```
-
 ```
 ## `summarise()` ungrouping output (override with `.groups` argument)
-```
-
-```r
-bottom_life_expectancy <- head(life_expectancy_by_country, 10)
-bottom_life_expectancy$signal <- rep("worst", 10)
-top_life_expectancy <- tail(life_expectancy_by_country, 10)
-top_life_expectancy$signal <- rep("best", 10)
-
-to_plot <- rbind(bottom_life_expectancy, top_life_expectancy)
-  
-ggplot(to_plot, aes(x=reorder(Country, mean_life_expectancy), 
-                    y=mean_life_expectancy,
-                    fill=signal)) +
-  geom_bar(stat="identity") +
-  labs(title = "Top 10 best and worst life expectancy in the world in 2015",
-       fill = "Top 10",
-       x = "Country",
-       y = "Life expectancy") +
-  scale_fill_manual(values= c("blue", "green")) + 
-  theme(axis.text.x = element_text(angle = 45, vjust = 1, 
-                                   size = 9, hjust = 1))
 ```
 
 ![](life_expectancy_analysis_files/figure-html/life_expectancy_country_plot2015-1.png)<!-- -->
 
 
-## Including Plots
+## Regresor
 
-You can also embed plots, for example:
+Wpierw należy przygotowac dane. Zamieniono wiec atrybut Status na binarny atrybut Developed. Oprócz tego postanowiono zmniejszyc wymiarowosc zbioru przez wyrzucenie kolumn wysoko skorelowanych z jakas inna kolumna (nie przewidywana). Kolumny ktore wyrzucono to: infant deaths, percentage expenditure oraz thinness 5-9. Postanowiono również wyrzucic kolumne Country, ponieważ jest ona dosc problematyczna w odpowiednim przetworzeniu - labelowanie wprowadzaloby pewna relacje miedzy panstwami, skorelowana z kolejnoscia liter w alfabecie, a one hot encoding spowodowalby znaczne rozrosniecie sie wymiarowosci zbioru.
 
-![](life_expectancy_analysis_files/figure-html/pressure-1.png)<!-- -->
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+```r
+df_clean$Developed <- sapply(df_clean$Status == "Developed", as.numeric)
+
+df_complete <- select(df_clean, -c(Status, Country, `infant deaths`, 
+                                `percentage expenditure`, `thinness 5-9 years`))
+```
+
+Podzielono dane na zbiory treningowy oraz testowy w stosunku 70% - 30%
+
+
+```r
+idx <- createDataPartition(df_complete$`Life expectancy`, p=0.7, list=F)
+train <- df_complete[idx,]
+test <- df_complete[-idx,]
+```
+
+Ze wzgledu na rozne skale wartosci kolumn postanowiono przeprowadzic standaryzacje zbioru i przeskalowanie kolumn do wartosci z przedzialu [0, 1]
+
+
+```r
+preProcValues <- preProcess(train, method = "range")
+
+train<- predict(preProcValues, train)
+test <- predict(preProcValues, test)
+```
+
+Nastepnie wyuczono model regresji liniowej
+
+
+```r
+linearModel = lm(`Life expectancy` ~ ., data=train)
+summary(linearModel)
+```
+
+```
+## 
+## Call:
+## lm(formula = `Life expectancy` ~ ., data = train)
+## 
+## Residuals:
+##      Min       1Q   Median       3Q      Max 
+## -0.39282 -0.04224 -0.00215  0.04302  0.35092 
+## 
+## Coefficients:
+##                                    Estimate Std. Error t value Pr(>|t|)    
+## (Intercept)                        0.320141   0.012384  25.852  < 2e-16 ***
+## Year                              -0.011211   0.005941  -1.887  0.05929 .  
+## `Adult Mortality`                 -0.272340   0.013343 -20.410  < 2e-16 ***
+## Alcohol                           -0.002022   0.010572  -0.191  0.84833    
+## `Hepatitis B`                     -0.021331   0.009572  -2.228  0.02596 *  
+## Measles                           -0.115318   0.033641  -3.428  0.00062 ***
+## BMI                                0.049603   0.008646   5.737 1.11e-08 ***
+## `under-five deaths`               -0.074687   0.031786  -2.350  0.01888 *  
+## Polio                              0.052957   0.009609   5.511 4.02e-08 ***
+## `Total expenditure`                0.021912   0.013361   1.640  0.10115    
+## Diphtheria                         0.076434   0.010755   7.107 1.64e-12 ***
+## `HIV/AIDS`                        -0.463498   0.021822 -21.240  < 2e-16 ***
+## GDP                                0.106556   0.017541   6.075 1.48e-09 ***
+## `thinness  1-19 years`            -0.020644   0.014315  -1.442  0.14942    
+## `Income composition of resources`  0.142231   0.013513  10.525  < 2e-16 ***
+## Schooling                          0.289024   0.020276  14.255  < 2e-16 ***
+## Developed                          0.018519   0.006235   2.970  0.00301 ** 
+## ---
+## Signif. codes:  0 '***' 0.001 '**' 0.01 '*' 0.05 '.' 0.1 ' ' 1
+## 
+## Residual standard error: 0.07619 on 2027 degrees of freedom
+## Multiple R-squared:  0.8218,	Adjusted R-squared:  0.8204 
+## F-statistic: 584.2 on 16 and 2027 DF,  p-value: < 2.2e-16
+```
+
+Wynik polecenia summary dla wytrenowanego modelu prezentuje kilka waznych statystyk. W celu interpretacji znaczenia poszczególnych atrybutów w modelu najwazniejsze sa prawdopodobnie p-values. Niskie wartosci p-value oznaczaja odrzucenie hipotezy zerowej o mnozniku danego atrybutu rownego 0. Mozna wiec zauwazyc ze prawdopodobnie najmniej istotnymi atrybutami w uzyskanym modelu sa atrybuty Alcohol, thinness  1-19 years oraz Total expenditure. W przypadku standardowego progu p-value < 0.05, mozna stwierdzic, ze rowniez atrybut Year nie odgrywa znaczacej roli.
+
+
+
+```r
+train <- select(train, -c(Alcohol, Year, `thinness  1-19 years`, `Total expenditure`))
+test <- select(test, -c(Alcohol, Year, `thinness  1-19 years`, `Total expenditure`))
+
+linearModel = lm(`Life expectancy` ~ ., data=train)
+summary(linearModel)
+```
+
+```
+## 
+## Call:
+## lm(formula = `Life expectancy` ~ ., data = train)
+## 
+## Residuals:
+##      Min       1Q   Median       3Q      Max 
+## -0.38474 -0.04279 -0.00250  0.04430  0.35365 
+## 
+## Coefficients:
+##                                    Estimate Std. Error t value Pr(>|t|)    
+## (Intercept)                        0.316824   0.011026  28.734  < 2e-16 ***
+## `Adult Mortality`                 -0.274213   0.013262 -20.677  < 2e-16 ***
+## `Hepatitis B`                     -0.024308   0.009512  -2.555 0.010680 *  
+## Measles                           -0.110806   0.033499  -3.308 0.000957 ***
+## BMI                                0.055534   0.008161   6.805 1.33e-11 ***
+## `under-five deaths`               -0.098003   0.029195  -3.357 0.000803 ***
+## Polio                              0.053072   0.009608   5.524 3.75e-08 ***
+## Diphtheria                         0.078529   0.010724   7.323 3.48e-13 ***
+## `HIV/AIDS`                        -0.458983   0.021557 -21.291  < 2e-16 ***
+## GDP                                0.103522   0.017510   5.912 3.95e-09 ***
+## `Income composition of resources`  0.137406   0.013295  10.335  < 2e-16 ***
+## Schooling                          0.291586   0.019551  14.914  < 2e-16 ***
+## Developed                          0.023031   0.005567   4.137 3.67e-05 ***
+## ---
+## Signif. codes:  0 '***' 0.001 '**' 0.01 '*' 0.05 '.' 0.1 ' ' 1
+## 
+## Residual standard error: 0.07628 on 2031 degrees of freedom
+## Multiple R-squared:  0.821,	Adjusted R-squared:   0.82 
+## F-statistic: 776.4 on 12 and 2031 DF,  p-value: < 2.2e-16
+```
+
+
+Wyniki modelu na zbiorze treningowym zaprezentowano ponizej:
+
+
+```r
+pred1 <- predict(linearModel, newdata = test)
+rmse <- sqrt(sum((exp(pred1) - test$`Life expectancy`)^2)/length(test$`Life expectancy`))
+c(RMSE = rmse, R2=summary(linearModel)$r.squared)
+```
+
+```
+##      RMSE        R2 
+## 1.2780673 0.8210253
+```
+
+Jak widac model osiagnal calkiem przyzwoity wynik. Wynik R^2 mozna zinterpretowac jako 82% calkowitej wariancji w dlugosci zycia mozliwej do wytlumaczenia przez uzyte atrybuty, co wydaje sie byc calkiem solidnym wynikiem.

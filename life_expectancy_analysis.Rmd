@@ -1,7 +1,7 @@
 ---
 title: "Life Expectancy Analysis"
 author: "Dominik Grzegorzewicz"
-date: "13 12 2020"
+date: "18 12 2020"
 output: 
   html_document:
     toc: true
@@ -14,9 +14,16 @@ runtime: shiny
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-## Preliminaries
+```{r date}
+Sys.Date()
+```
 
-Used libraries
+## Podsumowanie
+Celem projektu byla analiza zbioru danych "Life expectancy" zawierajacego informacje o dlugosci zycia w poszczegolnych panstwach na przestrzeni kilku lat. Poczatkowym etapem analizy bylo ogolne zapoznanie sie ze zbiorem. Zapoznano sie ze statystykami oraz zauwazono problem braku wystarczajacej reprezentacji kilku panstw. Szczegolowa analiza doprowadzila do decyzji o usunieciu ich ze zbioru. Nastepnie podliczono wartosci brakujace dla kazdej kolumny, i zagregowano brakujace ilosci w wierszach do postaci sum NaNów, a nastepnie przeanalizowano najbardziej wybrakowane rekordy i atrybuty. Postanowiono rowniez przyjrzec sie kilku nastepnym wartosciom, ale w koncu podjeto decyzje o dokonaniu uzupelnienia wybrakowanych wartosci przez algorytm k-NN. Nastepnie dokonano szczegolowej analizy sytuacji przez wykreslenie wykresow pomagajacych rozeznac sie w zaleznosciach miedzy atrybutami. Sprawdzono ilosci kategorii, rozklady oraz korelacje miedzy atrybutami. Stworzono rowniez interaktywny wykres dlugosci zycia w czasie pozwalajacy na filtrowanie na podstawie panstwa. Ostatnim etapem bylo wytrenowanie modelu regresji liniowej do przewidywania dlugosci zycia. W tym miejscu dokonano rowniez analizy modelu.
+
+## Operacje wstepne
+
+Uzyte biblioteki
 ```{r libraries, warning=FALSE, message=FALSE}
 library(readr)
 library(dplyr)
@@ -27,21 +34,22 @@ library(stringr)
 library(DMwR)
 library(reshape2)
 library(leaflet)
+library(caret)
 ```
 
-The line making the code reproducible
+Zapewnienie powtarzalnosci wyników
 ```{r reproducability}
 set.seed(101)
 ```
 
-Load dataset
+Wczytanie zbioru danych
 ```{r load}
 df <- read_csv("data/Life_Expectancy_Data.csv", quote = "")
 ```
 
-## Data summary
+## Zapoznanie sie ze zbiorem
 
-First let's see the size and print couple of records to see the structure of the data set
+Pierwszym etapem analizy jest zapoznanie sie z wymiarowoscia zbioru oraz jego struktura przez wypisanie kilku poczatkowych wierszy
 ```{r dim}
 dim(df)
 ```
@@ -55,7 +63,7 @@ kable(select(head(df), Country:BMI), digits=2)
 kable(select(head(df), `under-five deaths`:Schooling), digits=2)
 ```
 
-As we can see the dataset contains `r nrow(df)` records of `r ncol(df)` features. Zawiera on informacje o ogólnym stanie gospodarki oraz o badaniach medycznych dla danego kraju w danym roku.
+Zauwazono ze dane zawieraja `r nrow(df)` rekordow opisanych przez `r ncol(df)` atrybutow. Zbior danych zaweira informacje o ogólnym stanie gospodarki oraz o badaniach medycznych dla danego kraju w danym roku.
 
 ```{r infos}
 kable(sapply(df, n_distinct))
@@ -96,7 +104,7 @@ df %>% filter(is.na(`Life expectancy`)) %>% nrow()
 
 Widac, ze ilosc rekordow sie pokrywa - wszystkie rekordy z brakujaca wartoscia Life expectancy naleza do panstw, reprezentowanych pojedynczo w roku 2013.
 
-## Data cleaning
+## Czyszczenie danych
 
 Count % of missing values for every column
 ```{r missing_plot}
@@ -140,7 +148,6 @@ df[unlist(row_select),] %>% select(Country, Year) %>% kable
 Lacznie sa to trzy panstwa, z czego dane dla South Sudan sa mocno wybrakowane na przestrzeni lat 2000-2010. Ma to sens, gdyz panstwo to formalnie powstalo dopiero w 2011 roku. Pozostale wartosci - Monaco oraz San Marino, odnosza sie do wyzej wymienionych panstw majacych jedynie jeden rekord danych dla roku 2013.
 
 Ze wzgledu na to ze Population jest najbardziej wybrakowanym atrybutem, postanowiono takze blizej go przeanalizowac. Wypisano wiec kraje w ktorych atrybut ten nie zostal ani razu uzupelniony.
-Checking Population statistics for countries
 
 ```{r missing_population}
 by_country_population <- df %>%
@@ -206,81 +213,6 @@ kable(diphtheria_polio)
 
 Rowniez sa to ciekawe przypadki, gdyz znowu wartosci sa wybrakowane dla panstw ktore nie istnialy w danych latach. Czarnogora powstala w 2006, oraz Timor Wschodni w 2002. Co ciekawe od tych momentow te atrybuty dla tych panstw sa juz uzupelnione.
 
-Kolejny atrybut jaki postanowiono sprawdzic 
-
-```{r missing_thin, cache=TRUE}
-thinness <- df %>%
-  filter(is.na(`thinness 5-9 years`) | is.na(`thinness  1-19 years`) | is.na(BMI))
-kable(unique(thinness$Country))
-
-by_country_alcohol <- df %>%
-  group_by(Country) %>%
-  summarise(
-    count = n(),
-    na = sum(is.na(Alcohol))
-  ) %>%
-  filter(count == na) %>%
-  select(Country)
-
-kable(pull(by_country_alcohol, Country))
-
-by_country_schooling <- df %>%
-  group_by(Country) %>%
-  summarise(
-    count = n(),
-    na = sum(is.na(Schooling))
-  ) %>%
-  filter(count == na) %>%
-  select(Country)
-
-kable(pull(by_country_schooling, Country))
-
-by_country_income <- df %>%
-  group_by(Country) %>%
-  summarise(
-    count = n(),
-    na = sum(is.na(`Income composition of resources`))
-  ) %>%
-  filter(count == na) %>%
-  select(Country)
-
-kable(pull(by_country_income, Country))
-
-by_country_exp <- df %>%
-  group_by(Country) %>%
-  summarise(
-    count = n(),
-    na = sum(is.na(`Total expenditure`))
-  ) %>%
-  filter(count == na) %>%
-  select(Country)
-
-kable(pull(by_country_exp, Country))
-
-by_country_gdp <- df %>%
-  group_by(Country) %>%
-  summarise(
-    count = n(),
-    na = sum(is.na(GDP))
-  ) %>%
-  filter(count == na) %>%
-  select(Country)
-
-kable(pull(by_country_gdp, Country))
-
-by_country_hep <- df %>%
-  group_by(Country) %>%
-  summarise(
-    count = n(),
-    na = sum(is.na(`Hepatitis B`))
-  ) %>%
-  filter(count == na) %>%
-  select(Country)
-
-kable(pull(by_country_hep, Country))
-
-```
-
 Pozostale wartosci wybrakowane postanowiono uzupelnic uzywajac do tego algorytmu knn, co jest dosc standardowa i stosunkowo trafna technika imputacji wartosci. 
 
 ```{r knn_imputation, cache=TRUE}
@@ -290,6 +222,8 @@ df_to_impute$Status <- as.factor(df$Status)
 
 df_clean <- knnImputation(df_to_impute)
 ```
+
+## Szczegolowa analiza 
 
 Majac juz wyczyszczony zbior danych, postanowiono rowniez sprawdzic stosunek ilosci panstw rozwinietych i rozwijajacych sie. Wyniki zaprezentowano na wykresie:
 
@@ -476,40 +410,57 @@ renderPlot({
 
 ## Regresor
 
-Wpierw należy przygotowac dane. Zamieniono wiec atrybut Status na binarny atrybut Developed. Oprócz tego postanowiono zmniejszyc wymiarowosc zbioru przez wyrzucenie kolumn wysoko skorelowanych z jakas inna kolumna (nie przewidywana). Kolumny ktore wyrzucono to: infant deaths, percentage expenditure oraz thinness 5-9.
+Wpierw należy przygotowac dane. Zamieniono wiec atrybut Status na binarny atrybut Developed. Oprócz tego postanowiono zmniejszyc wymiarowosc zbioru przez wyrzucenie kolumn wysoko skorelowanych z jakas inna kolumna (nie przewidywana). Kolumny ktore wyrzucono to: infant deaths, percentage expenditure oraz thinness 5-9. Postanowiono również wyrzucic kolumne Country, ponieważ jest ona dosc problematyczna w odpowiednim przetworzeniu - labelowanie wprowadzaloby pewna relacje miedzy panstwami, skorelowana z kolejnoscia liter w alfabecie, a one hot encoding spowodowalby znaczne rozrosniecie sie wymiarowosci zbioru.
+
 ```{r prepare}
 df_clean$Developed <- sapply(df_clean$Status == "Developed", as.numeric)
 
-# CZY COUNTRY REZ????
-df_clean <- select(df_clean, -c(Status, Country, `infant deaths`, 
+df_complete <- select(df_clean, -c(Status, Country, `infant deaths`, 
                                 `percentage expenditure`, `thinness 5-9 years`))
 ```
 
-Podzielono dane na zbiory train, test oraz validate
+Podzielono dane na zbiory treningowy oraz testowy w stosunku 70% - 30%
+
 ```{r split}
-spec = c(train = .8, test = .2)
-
-g = sample(cut(
-  seq(nrow(df_clean)), 
-  nrow(df_clean)*cumsum(c(0,spec)),
-  labels = names(spec)
-))
-
-res = split(df_clean, g)
+idx <- createDataPartition(df_complete$`Life expectancy`, p=0.7, list=F)
+train <- df_complete[idx,]
+test <- df_complete[-idx,]
 ```
+
+Ze wzgledu na rozne skale wartosci kolumn postanowiono przeprowadzic standaryzacje zbioru i przeskalowanie kolumn do wartosci z przedzialu [0, 1]
 
 ```{r standarization}
-res$train <- as.data.frame(scale(res$train))
-res$test <- as.data.frame(scale(res$test))
+preProcValues <- preProcess(train, method = "range")
+
+train<- predict(preProcValues, train)
+test <- predict(preProcValues, test)
 ```
 
+Nastepnie wyuczono model regresji liniowej
+
 ```{r regression}
-linearModel = lm(`Life expectancy` ~ ., data=res$train)
+linearModel = lm(`Life expectancy` ~ ., data=train)
 summary(linearModel)
 ```
 
+Wynik polecenia summary dla wytrenowanego modelu prezentuje kilka waznych statystyk. W celu interpretacji znaczenia poszczególnych atrybutów w modelu najwazniejsze sa prawdopodobnie p-values. Niskie wartosci p-value oznaczaja odrzucenie hipotezy zerowej o mnozniku danego atrybutu rownego 0. Mozna wiec zauwazyc ze prawdopodobnie najmniej istotnymi atrybutami w uzyskanym modelu sa atrybuty Alcohol, thinness  1-19 years oraz Total expenditure. W przypadku standardowego progu p-value < 0.05, mozna stwierdzic, ze rowniez atrybut Year nie odgrywa znaczacej roli.
+
+
+```{r xd}
+train <- select(train, -c(Alcohol, Year, `thinness  1-19 years`, `Total expenditure`))
+test <- select(test, -c(Alcohol, Year, `thinness  1-19 years`, `Total expenditure`))
+
+linearModel = lm(`Life expectancy` ~ ., data=train)
+summary(linearModel)
+```
+
+
+Wyniki modelu na zbiorze treningowym zaprezentowano ponizej:
+
 ```{r prediction}
-pred1 <- predict(linearModel, newdata = res$test)
-rmse <- sqrt(sum((exp(pred1) - res$test$`Life expectancy`)^2)/length(res$test$`Life expectancy`))
+pred1 <- predict(linearModel, newdata = test)
+rmse <- sqrt(sum((exp(pred1) - test$`Life expectancy`)^2)/length(test$`Life expectancy`))
 c(RMSE = rmse, R2=summary(linearModel)$r.squared)
 ```
+
+Jak widac model osiagnal calkiem przyzwoity wynik. Wynik R^2 mozna zinterpretowac jako 82% calkowitej wariancji w dlugosci zycia mozliwej do wytlumaczenia przez uzyte atrybuty, co wydaje sie byc calkiem solidnym wynikiem.
